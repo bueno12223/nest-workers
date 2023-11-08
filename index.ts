@@ -15,7 +15,6 @@ export * from './decorators'
  * @param maxWorkers Maximum number of workers to spawn
  * @param maxTasks Maximum number of tasks a worker can complete before being restarted
  * @param maxLifetime Maximum amount of time a worker can be alive before being restarted
- * @param taskQueueLimit Maximum number of tasks that can be queued while all workers are busy
 */
 @Injectable()
 export class WorkerPoolService implements OnModuleDestroy {
