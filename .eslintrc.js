@@ -1,0 +1,40 @@
+module.exports = {
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    project: 'tsconfig.json',
+    tsconfigRootDir: __dirname,
+    sourceType: 'module',
+  },
+  plugins: ['@typescript-eslint/eslint-plugin'],
+  extends: [
+    'plugin:@typescript-eslint/recommended',
+  ],
+  root: true,
+  env: {
+    node: true,
+    jest: true,
+  },
+  ignorePatterns: ['.eslintrc.js'],
+  rules: {
+    '@typescript-eslint/explicit-function-return-type': 0,
+    '@typescript-eslint/explicit-module-boundary-types': 0,
+    '@typescript-eslint/no-explicit-any': 'warn',
+    "consistent-return": 'error',
+    "no-tabs": 0,
+    "max-len": 0,
+    "func-names": [0, "as-needed"],
+    "arrow-body-style": 0,
+    "semi": [2, "never"],
+    "indent": [1, "tab"],
+    "no-param-reassign": 0,
+    "no-useless-escape": 0,
+    "operator-linebreak": 0,
+    "quotes": [2, "single"],
+    "no-use-before-define": 0,
+    "no-underscore-dangle": 0,
+    "brace-style": [2, "stroustrup"],
+    "@typescript-eslint/no-namespace": 0,
+    "object-curly-spacing": [2, "always"],
+    "no-bitwise": ["error", { "allow": ["~"] }]
+  },
+};
