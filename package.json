@@ -1,7 +1,6 @@
 {
-  "package-name": "@nestjs/workers-pool",
   "name": "@nestjs/workers-pool",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "Nest Workers Pool is a library that allows you to create a pool of workers to execute tasks in parallel.",
   "main": "dist/index.js",
   "private": false,
