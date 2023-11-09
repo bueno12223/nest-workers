@@ -7,7 +7,7 @@
   "git repository": "https://github.com/bueno12223/nest-workers",
   "scripts": {
     "build": "tsc",
-    "test": "jest"
+    "test": "tsc"
   },
   "dependencies": {
     "@nestjs/common": "^10.2.8",
