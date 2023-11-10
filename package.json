@@ -1,10 +1,13 @@
 {
-  "name": "@nestjs/workers-pool",
+  "name": "nestjs-workers-pool",
   "version": "1.1.1",
   "description": "Nest Workers Pool is a library that allows you to create a pool of workers to execute tasks in parallel.",
   "main": "dist/index.js",
   "private": false,
-  "git repository": "https://github.com/bueno12223/nest-workers",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bueno12223/nest-workers"
+  },
   "scripts": {
     "build": "tsc",
     "test": "tsc"
