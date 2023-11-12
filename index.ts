@@ -1,5 +1,5 @@
 import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common'
-import { Worker } from 'worker_threads'
+import { TransferListItem, Worker } from 'worker_threads'
 import * as os from 'os'
 import { WORKER_OPTIONS_TOKEN } from './constants'
 import { WorkerOptions } from './types'
@@ -122,7 +122,7 @@ export class WorkerPoolService implements OnModuleDestroy {
 		}
 		const worker = new Worker(this.workerOptions.scriptPath, this.workerOptions.workerOptions)
 		this.workerCreationTimes.set(worker, Date.now())
-		worker.on('exit', (code) => {
+		worker.on('exit', async (code) => {
 			this.log(`Worker exited with code ${code}`)
 			if (code !== 0) {
 				console.error(`Worker stopped with exit code ${code}`)
@@ -131,12 +131,11 @@ export class WorkerPoolService implements OnModuleDestroy {
 
 			this.activeWorkers.delete(worker)
 			this.workerCurrentTask.delete(worker)
-
+			await this.endWorker(worker)
 			this.replenishWorkerPool()
 		})
 
 		this.setupWorkerListeners(worker)
-		worker.emit('init')
 		this.workerPool.push(worker)
 		this.notifyWorkerAvailable(worker)
 	}
@@ -205,84 +204,6 @@ export class WorkerPoolService implements OnModuleDestroy {
 		})
 	}
 
-	/**
-	 * Wait until a worker is available
-	 * @private
-	 * @returns {Promise<Worker>} Promise that resolves with a worker
-	 * */
-	private async waitUntilWorkerAvailable(): Promise<Worker> {
-		return new Promise((resolve) => {
-			if (this.workerPool.length > 0) {
-				const worker = this.workerPool.pop()
-				if (worker) {
-					return resolve(worker)
-				}
-			}
-			setTimeout(() => {
-				this.waitUntilWorkerAvailable().then((worker) => resolve(worker))
-			}, 100)
-			return null
-		})
-	}
-
-	/**
-	 * Run a task on a worker, returning a promise that resolves a boolean indicating if the task was successfully queued
-	 * @param data Data to pass to the worker, you can set the type of this parameter by setting the generic type of this function
-	 * @returns {Promise<TResponse>} Promise that resolves with the result of the task
-	 * */
-	runTask<TParam>(data: TParam): Promise<boolean> {
-		return new Promise(async(resolve, reject) => {
-			const worker = this.workerPool.pop()
-
-
-			if (!worker) {
-				this.log('No workers available')
-				if(this.workerOptions.waitUntilAvailable) {
-					this.pendingTasksResolvers.push(resolve)
-					return resolve(true)
-				}
-				else {
-					return reject(new Error('No workers available'))
-				}
-			}
-			this.log('Running task', worker.threadId, data)
-			this.activeWorkers.add(worker)
-			this.workerCurrentTask.set(worker, data) 
-			const messageHandler = async (...args: unknown[]) => {
-				const isFishedMessage = (
-					typeof args[0] === 'object' && args[0] !== null && (args[0] as { type?: unknown }).type === 'message'
-					|| typeof args[0] === 'string' && args[0] === 'message'
-				)
-
-				// Ignore messages that are not the result of the task
-				if(!isFishedMessage) return
-				worker.removeListener('message', messageHandler)
-
-				this.activeWorkers.delete(worker)
-				this.workerCurrentTask.delete(worker)
-
-				const taskCount = (this.workerTaskCount.get(worker) || 0) + 1
-				this.workerTaskCount.set(worker, taskCount)
-
-				if (await this.shouldRestartWorker(worker)) {
-					await this.restartWorker(worker).catch(reject)
-				}
-				else {
-					this.workerPool.push(worker)
-				}
-				this.notifyWorkerAvailable(worker)
-			}
-			worker.on('message', messageHandler)
-			worker.once('error', (err: Error) => {
-				console.error(`Worker encountered an error: ${err.message}`)
-				this.activeWorkers.delete(worker)
-				this.restartWorker(worker).catch(reject)
-				return reject(err)
-			})
-			worker.postMessage(data)
-			return resolve(true)
-		})
-	}
 
 	/**
 	 * Handle a message from a worker
@@ -315,6 +236,81 @@ export class WorkerPoolService implements OnModuleDestroy {
 		onSuccess(payload)
 	}
 
+	private async handleWorkerError(worker: Worker, err: Error, reject: (reason?: unknown) => void)  {
+		const errorHandler = Reflect.getMetadata('worker:error', this)
+		if (errorHandler && typeof this[errorHandler.handler as keyof this] === 'function') {
+			const boundHandler = (this[errorHandler.handler as keyof this] as (...args: unknown[]) => void).bind(this)
+			boundHandler(err)
+		}
+		this.log(`Worker encountered an error: ${err.message}`)
+		this.activeWorkers.delete(worker)
+		this.workerCurrentTask.delete(worker)
+
+
+		await this.restartWorker(worker)
+			.catch(reject)
+		return reject(err)
+	}
+
+	handleWorkerExit(code: number) {
+		const exitHandler = Reflect.getMetadata('worker:exit', this)
+		if (exitHandler && typeof exitHandler.handler === 'function') {
+			const boundHandler = (exitHandler.handler as (...args: unknown[]) => void).bind(this)
+			boundHandler(code)
+			console.log('boundHandler', boundHandler)
+		}
+	}
+		
+	/**
+	 * Wait until a worker is available
+	 * @private
+	 * @returns {Promise<Worker>} Promise that resolves with a worker
+	 * */
+	private async waitUntilWorkerAvailable(): Promise<Worker> {
+		return new Promise((resolve) => {
+			if (this.workerPool.length > 0) {
+				const worker = this.workerPool.pop()
+				if (worker) {
+					return resolve(worker)
+				}
+			}
+			setTimeout(() => {
+				this.waitUntilWorkerAvailable().then((worker) => resolve(worker))
+			}, 100)
+			return null
+		})
+	}
+
+	/**
+	 * Run a task on a worker, returning a promise that resolves a boolean indicating if the task was successfully queued
+	 * @param data Data to pass to the worker, you can set the type of this parameter by setting the generic type of this function
+	 * @returns {Promise<TResponse>} Promise that resolves with the result of the task
+	 * */
+	runTask<TParam>(data: TParam, transferList?: readonly TransferListItem[] | undefined): Promise<boolean> {
+		return new Promise(async(resolve, reject) => {
+			const worker = this.workerPool.pop()
+
+
+			if (!worker) {
+				this.log('No workers available')
+				if(this.workerOptions.waitUntilAvailable) {
+					this.pendingTasksResolvers.push(resolve)
+					return resolve(true)
+				}
+				else {
+					return reject(new Error('No workers available'))
+				}
+			}
+			this.log('Running task', worker.threadId, data)
+			this.activeWorkers.add(worker)
+			this.workerCurrentTask.set(worker, data)
+			worker.on('message',  async(payload: unknown) => this.handleWorkerMessage(worker, payload, resolve, reject))
+			worker.once('error', (err: Error) => this.handleWorkerError(worker, err, reject))
+			worker.postMessage(data, transferList)
+			return resolve(true)
+		})
+	}
+
 	/**
 	 * Run a task on a worker, returning a promise that resolves with the result of the task
 	 * * if you don't need the result of the task, use runTask instead
@@ -322,7 +318,7 @@ export class WorkerPoolService implements OnModuleDestroy {
 	 * @param data Data to pass to the worker, you can set the type of this parameter by setting the generic type of this function
 	 * @returns {Promise<TResponse>} Promise that resolves with the result of the task
 	 * */
-	async runSyncTask<TParam, TResponse>(data: TParam): Promise<TResponse> {
+	async runSyncTask<TParam, TResponse>(data: TParam, transferList?: readonly TransferListItem[] | undefined): Promise<TResponse> {
 		return new Promise(async(resolve, reject) => {
 			const workerInPool = this.workerPool.pop()
 			let worker: Worker
@@ -347,13 +343,9 @@ export class WorkerPoolService implements OnModuleDestroy {
 			this.workerCurrentTask.set(worker, data) 
 
 			worker.on('message',  async(payload: unknown) => this.handleWorkerMessage(worker, payload, resolve, reject))
-			worker.once('error', (err: Error) => {
-				console.error(`Worker encountered an error: ${err.message}`)
-				this.activeWorkers.delete(worker)
-				this.restartWorker(worker).catch(reject)
-				return reject(err)
-			})
-			worker.postMessage(data)
+			worker.once('error', (err: Error) => this.handleWorkerError(worker, err, reject))
+
+			worker.postMessage(data, transferList)
 			return worker
 		})
 	}
@@ -417,6 +409,7 @@ export class WorkerPoolService implements OnModuleDestroy {
 	private async endWorker(worker: Worker): Promise<boolean> {
 		this.log('Ending worker', worker.threadId)
 		worker.removeAllListeners()
+		this.handleWorkerExit(0)
 		await worker.terminate()
 		this.workerTaskCount.delete(worker)
 		this.workerCreationTimes.delete(worker)
@@ -425,7 +418,6 @@ export class WorkerPoolService implements OnModuleDestroy {
 
 	private async restartWorker(worker: Worker): Promise<void> {
 		this.log('Restarting worker', worker.threadId)
-		worker.emit('restart')
 		await this.endWorker(worker)
 		this.addNewWorkerToPool()
 	}
@@ -468,10 +460,18 @@ export class WorkerPoolService implements OnModuleDestroy {
 		}
 	  }
 
-	onModuleDestroy() {
+	/**
+	 * Destroy the worker pool
+	 * @private
+	 * */
+	destroyWorkerPool() {
 		this.workerPool.forEach(worker => {
-			worker.removeAllListeners()
 			worker.terminate()
+			worker.removeAllListeners()
 		})
+	}
+
+	onModuleDestroy() {
+		this.destroyWorkerPool()
 	}
 }
